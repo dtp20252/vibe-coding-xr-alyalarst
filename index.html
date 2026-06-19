@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>AR Hemodialysis Cannulation Training System</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <link type="text/css" rel="stylesheet" href="https://xrblocks.github.io/css/xr.css" />
+    <script>window.litDisableBundleWarning = true;</script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
+          "troika-three-text": "https://cdn.jsdelivr.net/gh/protectwise/troika@028b81cf308f0f22e5aa8e78196be56ec1997af5/packages/troika-three-text/src/index.js",
+          "troika-three-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-three-utils/src/index.js",
+          "troika-worker-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-worker-utils/src/index.js",
+          "bidi-js": "https://esm.sh/bidi-js@%5E1.0.2?target=es2022",
+          "webgl-sdf-generator": "https://esm.sh/webgl-sdf-generator@1.1.1/es2022/webgl-sdf-generator.mjs",
+          "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
+          "lit/": "https://esm.run/lit@3/",
+          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/xrblocks.js",
+          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/addons/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <script type="module">
+      import * as THREE from 'three';
+      import * as xb from 'xrblocks';
+
+      // ==========================================
+      // STATE ENUMERATIONS
+      // ==========================================
+      const SCENES = {
+        ONBOARDING: 1,
+        VISUALIZATION: 2,
+        ACCESS_SELECTION: 3,
+        GUIDANCE: 4,
+        HANDS_FREE: 5,
+        QUIZ: 6,
+        FINAL_SIM: 7,
+        FEEDBACK: 8
+      };
+
+      class HemodialysisTraining extends xb.Script {
+        constructor() {
+          super();
+          
+          // Global Variables
+          this.sceneState = SCENES.ONBOARDING;
+          this.mode = "beginner";
+          this.access = "AVF";
+          this.angleMin = 25;
+          this.angleMax = 30;
+          this.score = 0;
+          this.sessionTime = 300; // 5 minutes in seconds
+          
+          // Scores
+          this.scoreQuiz = 0;
+          this.scoreAngle = 0;
+          this.scoreSequence = 0;
+          this.scoreTime = 0;
+
+          // Scene Objects
+          this.envGroup = new THREE.Group();
+          this.armGroup = new THREE.Group();
+          this.vessels = [];
+          this.uiPanel = null;
+          this.bloodTexture = null;
+          this.protractor = new THREE.Group();
+          this.needleVisual = null;
+          
+          // Checklist
+          this.checklist = [
+            { id: 0, text: "Check thrill/bruit", done: false },
+            { id: 1, text: "Identify insertion point", done: false },
+            { id: 2, text: "Position needle angle", done: false },
+            { id: 3, text: "Insert bevel UP", done: false },
+            { id: 4, text: "Confirm blood backflow", done: false },
+            { id: 5, text: "Secure the needle", done: false }
+          ];
+
+          // Timers & Animations
+          this.shakeTimer = 0;
+          this.lastTime = performance.now();
+          this.quizUserAngle = 45;
+        }
+
+        async init() {
+          this.add(new THREE.AmbientLight(0xffffff, 0.6));
+          const surgicalLamp = new THREE.SpotLight(0xfff5e1, 20, 15, Math.PI/4, 0.5);
+          surgicalLamp.position.set(0, 3, -1);
+          this.add(surgicalLamp);
+
+          this.createBloodTexture();
+          this.buildEnvironment();
+          this.buildHandPhantom();
+          this.buildProtractor();
+
+          // Initialize at Scene 1
+          this.transitionTo(SCENES.ONBOARDING);
+        }
+
+        // ==========================================
+        // 3D ASSETS CONSTRUCTION
+        // ==========================================
+        
+        createBloodTexture() {
+          const canvas = document.createElement('canvas');
+          canvas.width = 16;
+          canvas.height = 128;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff'; // Base
+          ctx.fillRect(0, 0, 16, 128);
+          ctx.fillStyle = '#555555'; // Darker part for particle effect
+          ctx.fillRect(0, 0, 16, 64);
+          
+          this.bloodTexture = new THREE.CanvasTexture(canvas);
+          this.bloodTexture.wrapS = THREE.RepeatWrapping;
+          this.bloodTexture.wrapT = THREE.RepeatWrapping;
+          this.bloodTexture.repeat.set(1, 4);
+        }
+
+        buildEnvironment() {
+          const floor = new THREE.Mesh(new THREE.BoxGeometry(10, 0.1, 10), new THREE.MeshStandardMaterial({color: 0x888888}));
+          floor.position.y = -0.05;
+          this.envGroup.add(floor);
+
+          const wall = new THREE.Mesh(new THREE.BoxGeometry(10, 5, 0.1), new THREE.MeshStandardMaterial({color: 0xfafafa}));
+          wall.position.z = -5;
+          wall.position.y = 2.5;
+          this.envGroup.add(wall);
+
+          const chair = new THREE.Group();
+          const seat = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.4, 1.5), new THREE.MeshStandardMaterial({color: 0x333333}));
+          const backrest = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.0, 0.2), new THREE.MeshStandardMaterial({color: 0x333333}));
+          backrest.position.set(0, 0.5, -0.6);
+          backrest.rotation.x = -Math.PI/6;
+          const armrest = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.1, 1.0), new THREE.MeshStandardMaterial({color: 0x222222}));
+          armrest.position.set(0.45, 0.3, 0);
+          chair.add(seat, backrest, armrest);
+          chair.position.set(0.5, 0.2, -1.2);
+          this.envGroup.add(chair);
+
+          const machine = new THREE.Group();
+          const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.3, 0.5), new THREE.MeshStandardMaterial({color: 0xdddddd}));
+          const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.3), new THREE.MeshBasicMaterial({color: 0x00ccff}));
+          screen.position.set(0, 0.45, 0.26);
+          const tubeR = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.6), new THREE.MeshBasicMaterial({color: 0xff0000}));
+          tubeR.position.set(-0.1, 0.1, 0.26);
+          const tubeB = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.6), new THREE.MeshBasicMaterial({color: 0x0000ff}));
+          tubeB.position.set(0.1, 0.1, 0.26);
+          machine.add(body, screen, tubeR, tubeB);
+          machine.position.set(-0.8, 0.65, -1.2);
+          this.envGroup.add(machine);
+
+          this.envGroup.visible = false; // Hidden in Scene 1
+          this.add(this.envGroup);
+        }
+
+        buildHandPhantom() {
+          const skinMat = new THREE.MeshStandardMaterial({color: 0xffdbac, transparent: true, opacity: 0.9});
+          
+          const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.04, 0.5, 16), skinMat);
+          forearm.rotation.x = Math.PI/2;
+          forearm.position.z = -0.1;
+          this.armGroup.add(forearm);
+
+          const wrist = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.045, 0.05), skinMat);
+          wrist.position.z = 0.18;
+          this.armGroup.add(wrist);
+
+          const palm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.04, 0.15), skinMat);
+          palm.position.z = 0.28;
+          this.armGroup.add(palm);
+
+          const fingerGeo = new THREE.CylinderGeometry(0.01, 0.01, 0.1, 8);
+          for(let i=0; i<4; i++) {
+            const finger = new THREE.Mesh(fingerGeo, skinMat);
+            finger.rotation.x = Math.PI/2;
+            finger.position.set(-0.045 + (i*0.03), 0, 0.4);
+            this.armGroup.add(finger);
+          }
+          const thumb = new THREE.Mesh(fingerGeo, skinMat);
+          thumb.rotation.set(Math.PI/2, 0, Math.PI/4);
+          thumb.position.set(0.07, 0, 0.32);
+          this.armGroup.add(thumb);
+
+          // Artery
+          const arteryMat = new THREE.MeshStandardMaterial({color: 0xff0000, map: this.bloodTexture});
+          const artery = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.45, 8), arteryMat);
+          artery.rotation.x = Math.PI/2;
+          artery.position.set(0.02, 0.035, -0.1);
+          artery.userData = { id: 'artery', name: 'Radial Artery', desc: 'Primary arterial flow' };
+          
+          // Vein
+          const veinMat = new THREE.MeshStandardMaterial({color: 0x0000ff, map: this.bloodTexture});
+          const vein = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.45, 8), veinMat);
+          vein.rotation.x = Math.PI/2;
+          vein.position.set(-0.02, 0.035, -0.1);
+          vein.userData = { id: 'vein', name: 'Cephalic Vein', desc: 'Primary target for AVF cannulation' };
+
+          // AVF Anastomosis point
+          const avfPoint = new THREE.Mesh(new THREE.SphereGeometry(0.015, 16, 16), new THREE.MeshBasicMaterial({color: 0xffff00}));
+          avfPoint.position.set(0, 0.035, 0.1);
+          avfPoint.userData = { id: 'avf', name: 'AVF Point', desc: 'Anastomosis connection' };
+
+          this.vessels = [artery, vein, avfPoint];
+          this.armGroup.add(artery, vein, avfPoint);
+
+          this.armGroup.position.set(0.4, 0.85, -1.2);
+          this.armGroup.visible = false;
+          this.add(this.armGroup);
+        }
+
+        buildProtractor() {
+          const ringGeo = new THREE.RingGeometry(0.08, 0.1, 32, 1, 0, Math.PI);
+          const ringMat = new THREE.MeshBasicMaterial({color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.5});
+          const ring = new THREE.Mesh(ringGeo, ringMat);
+          
+          this.needleVisual = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.003, 0.003, 0.2),
+            new THREE.MeshBasicMaterial({color: 0x00ff00})
+          );
+          this.needleVisual.position.y = 0.1;
+          
+          this.protractor.add(ring, this.needleVisual);
+          this.protractor.visible = false;
+          this.add(this.protractor);
+        }
+
+        // ==========================================
+        // UI & SCENE MANAGEMENT
+        // ==========================================
+        
+        clearUI() {
+          if (this.uiPanel) {
+            this.remove(this.uiPanel);
+            this.uiPanel = null;
+          }
+        }
+
+        transitionTo(sceneId) {
+          this.clearUI();
+          this.sceneState = sceneId;
+          
+          // Common UI Panel Setup
+          let panelWidth = 1.6;
+          let panelHeight = 1.1;
+          let yPos = 1.5;
+          let xPos = 0;
+
+          if (sceneId === SCENES.HANDS_FREE || sceneId === SCENES.FINAL_SIM) {
+            panelWidth = 2.0;
+            xPos = -0.5; // Move to side
+          }
+
+          this.uiPanel = new xb.SpatialPanel({ width: panelWidth, height: panelHeight, backgroundColor: '#111111ee' });
+          this.uiPanel.position.set(xPos, yPos, -0.9);
+          this.add(this.uiPanel);
+          const grid = this.uiPanel.addGrid();
+
+          switch(sceneId) {
+            case SCENES.ONBOARDING: this.buildScene1(grid); break;
+            case SCENES.VISUALIZATION: this.buildScene2(grid); break;
+            case SCENES.ACCESS_SELECTION: this.buildScene3(grid); break;
+            case SCENES.GUIDANCE: this.buildScene4(grid); break;
+            case SCENES.HANDS_FREE: this.buildScene5(grid); break;
+            case SCENES.QUIZ: this.buildScene6(grid); break;
+            case SCENES.FINAL_SIM: this.buildScene7(grid); break;
+            case SCENES.FEEDBACK: this.buildScene8(grid); break;
+          }
+        }
+
+        // SCENE 1
+        buildScene1(grid) {
+          this.envGroup.visible = false;
+          this.armGroup.visible = false;
+          this.protractor.visible = false;
+
+          grid.addRow({weight: 0.3}).addText({ text: 'AR Hemodialysis Training', fontSize: 0.12, fontColor: '#ffffff' });
+          grid.addRow({weight: 0.2}).addText({ text: 'Place phantom on surface. Camera tracking active.', fontSize: 0.07, fontColor: '#aaaaaa' });
+          
+          const btnRow = grid.addRow({weight: 0.3});
+          const btnBeginner = btnRow.addCol({weight: 0.5}).addTextButton({ text: 'Beginner Mode', fontSize: 0.08, backgroundColor: '#333333', fontColor: '#ffffff' });
+          const btnAdvanced = btnRow.addCol({weight: 0.5}).addTextButton({ text: 'Advanced Mode', fontSize: 0.08, backgroundColor: '#333333', fontColor: '#ffffff' });
+
+          const selectMode = (modeStr, btn) => {
+            this.mode = modeStr;
+            btnBeginner.backgroundColor = '#333333';
+            btnAdvanced.backgroundColor = '#333333';
+            btn.backgroundColor = '#4CAF50';
+            setTimeout(() => this.transitionTo(SCENES.VISUALIZATION), 1500);
+          };
+
+          btnBeginner.onTriggered = () => selectMode("beginner", btnBeginner);
+          btnAdvanced.onTriggered = () => selectMode("advanced", btnAdvanced);
+        }
+
+        // SCENE 2
+        buildScene2(grid) {
+          this.envGroup.visible = true;
+          this.armGroup.visible = true;
+
+          grid.addRow({weight: 0.2}).addText({ text: 'Vessel Visualization', fontSize: 0.1, fontColor: '#ffffff' });
+          this.s2InfoText = grid.addRow({weight: 0.2}).addText({ text: this.mode === 'beginner' ? 'This is the cephalic vein, your primary target.' : 'Inspect the vascular anatomy.', fontSize: 0.06, fontColor: '#4285f4' });
+          
+          const toggleRow = grid.addRow({weight: 0.3});
+          toggleRow.addCol({weight: 0.33}).addTextButton({ text: 'Arteries', fontSize: 0.07, backgroundColor: '#F44336', fontColor: '#ffffff' })
+            .onTriggered = () => { this.vessels[0].visible = true; this.vessels[1].visible = false; this.vessels[2].visible = false; };
+          toggleRow.addCol({weight: 0.33}).addTextButton({ text: 'Veins', fontSize: 0.07, backgroundColor: '#2196F3', fontColor: '#ffffff' })
+            .onTriggered = () => { this.vessels[0].visible = false; this.vessels[1].visible = true; this.vessels[2].visible = false; };
+          toggleRow.addCol({weight: 0.33}).addTextButton({ text: 'Both', fontSize: 0.07, backgroundColor: '#9C27B0', fontColor: '#ffffff' })
+            .onTriggered = () => { this.vessels.forEach(v => v.visible = true); };
+
+          grid.addRow({weight: 0.2}).addTextButton({ text: 'Next', fontSize: 0.08, backgroundColor: '#4CAF50', fontColor: '#ffffff' })
+            .onTriggered = () => this.transitionTo(SCENES.ACCESS_SELECTION);
+        }
+
+        // SCENE 3
+        buildScene3(grid) {
+          grid.addRow({weight: 0.2}).addText({ text: 'Access Type Selection', fontSize: 0.1, fontColor: '#ffffff' });
+          this.s3Badge = grid.addRow({weight: 0.2}).addText({ text: 'Select an access type below', fontSize: 0.06, fontColor: '#aaaaaa' });
+
+          const optRow = grid.addRow({weight: 0.4});
+          const btnAVF = optRow.addCol({weight: 0.33}).addTextButton({ text: 'AVF\n25°-30°', fontSize: 0.07, backgroundColor: '#333333', fontColor: '#ffffff' });
+          const btnAVG = optRow.addCol({weight: 0.33}).addTextButton({ text: 'AVG\n35°-45°', fontSize: 0.07, backgroundColor: '#333333', fontColor: '#ffffff' });
+          const btnCVC = optRow.addCol({weight: 0.33}).addTextButton({ text: 'CVC\n30°-45°', fontSize: 0.07, backgroundColor: '#333333', fontColor: '#ffffff' });
+
+          const setAccess = (type, min, max, btn) => {
+            this.access = type; this.angleMin = min; this.angleMax = max;
+            [btnAVF, btnAVG, btnCVC].forEach(b => b.backgroundColor = '#333333');
+            btn.backgroundColor = '#2196F3';
+            this.s3Badge.setText(`Selected: ${type} | Target angle: ${min}–${max}°`);
+            
+            // Move protractor base to target
+            const targetPos = new THREE.Vector3();
+            if(type === 'AVF') this.vessels[2].getWorldPosition(targetPos);
+            else this.vessels[1].getWorldPosition(targetPos);
+            this.protractor.position.copy(targetPos);
+          };
+
+          btnAVF.onTriggered = () => setAccess('AVF', 25, 30, btnAVF);
+          btnAVG.onTriggered = () => setAccess('AVG', 35, 45, btnAVG);
+          btnCVC.onTriggered = () => setAccess('CVC', 30, 45, btnCVC);
+
+          grid.addRow({weight: 0.2}).addTextButton({ text: 'Confirm', fontSize: 0.08, backgroundColor: '#4CAF50', fontColor: '#ffffff' })
+            .onTriggered = () => { if(this.access) this.transitionTo(SCENES.GUIDANCE); };
+        }
+
+        // SCENE 4
+        buildScene4(grid) {
+          this.protractor.visible = true;
+          this.protractor.lookAt(xb.core.camera.position);
+
+          grid.addRow({weight: 0.2}).addText({ text: 'Cannulation Guidance', fontSize: 0.1, fontColor: '#ffffff' });
+          this.s4AngleText = grid.addRow({weight: 0.2}).addText({ text: `Target: ${this.angleMin}° - ${this.angleMax}°`, fontSize: 0.09, fontColor: '#FFEB3B' });
+          grid.addRow({weight: 0.2}).addText({ text: 'Insert bevel UP. Tilt controller to match angle.', fontSize: 0.06, fontColor: '#aaaaaa' });
+          
+          grid.addRow({weight: 0.2}).addTextButton({ text: 'Ready to Practice', fontSize: 0.08, backgroundColor: '#4CAF50', fontColor: '#ffffff' })
+            .onTriggered = () => this.transitionTo(SCENES.HANDS_FREE);
+        }
+
+        // SCENE 5
+        buildScene5(grid) {
+          grid.addRow({weight: 0.15}).addText({ text: 'Hands-Free Practice', fontSize: 0.1, fontColor: '#ffffff' });
+          this.s5TimerText = grid.addRow({weight: 0.1}).addText({ text: 'Time: 05:00', fontSize: 0.08, fontColor: '#FF5722' });
+          
+          this.sessionTime = 300; // reset
+          this.checklist.forEach(item => item.done = false);
+
+          const listGrid = grid.addRow({weight: 0.5}).addGrid();
+          this.checklistUI = [];
+          
+          this.checklist.forEach((item, idx) => {
+            const row = listGrid.addRow({weight: 1/6});
+            const btn = row.addTextButton({ text: `[ ] ${item.text}`, fontSize: 0.06, backgroundColor: '#333333', fontColor: '#ffffff', textAlign: 'left' });
+            btn.onTriggered = () => {
+              item.done = true;
+              btn.setText(`[✓] ${item.text}`);
+              btn.backgroundColor = '#4CAF50';
+              this.checkAllDone(SCENES.QUIZ);
+            };
+            this.checklistUI.push(btn);
+          });
+
+          const ctrlRow = grid.addRow({weight: 0.2});
+          ctrlRow.addCol({weight: 0.5}).addTextButton({ text: 'Repeat Guidance', fontSize: 0.08, backgroundColor: '#2196F3', fontColor: '#ffffff' });
+          this.s5DoneBtn = ctrlRow.addCol({weight: 0.5}).addTextButton({ text: 'Done', fontSize: 0.08, backgroundColor: '#9E9E9E', fontColor: '#ffffff' });
+          this.s5DoneBtn.onTriggered = () => this.transitionTo(SCENES.QUIZ);
+        }
+
+        checkAllDone(nextScene) {
+          const allDone = this.checklist.every(i => i.done);
+          if(allDone) {
+            if(this.sceneState === SCENES.HANDS_FREE) {
+              this.s5DoneBtn.setText('Proceed to Quiz');
+              this.s5DoneBtn.backgroundColor = '#4CAF50';
+            } else if (this.sceneState === SCENES.FINAL_SIM) {
+              this.s7SubmitBtn.setText('Submit Session');
+              this.s7SubmitBtn.backgroundColor = '#4CAF50';
+              this.scoreSequence = 25; // Perfect sequence
+            }
+          }
+        }
+
+        // SCENE 6
+        buildScene6(grid) {
+          this.armGroup.visible = false;
+          this.protractor.visible = false;
+          this.quizStep = 'A'; // A: Identification, B: Angle
+
+          this.s6Title = grid.addRow({weight: 0.2}).addText({ text: 'Interactive Quiz - Part A', fontSize: 0.1, fontColor: '#ffffff' });
+          this.s6Question = grid.addRow({weight: 0.2}).addText({ text: 'What type of vascular access was primarily highlighted (Yellow Point)?', fontSize: 0.07, fontColor: '#aaaaaa' });
+          
+          this.s6InteractRow = grid.addRow({weight: 0.4});
+          
+          // Part A UI
+          this.btnA = this.s6InteractRow.addCol({weight: 0.33}).addTextButton({ text: 'AVF', fontSize: 0.08, backgroundColor: '#333333', fontColor: '#ffffff' });
+          this.btnB = this.s6InteractRow.addCol({weight: 0.33}).addTextButton({ text: 'AVG', fontSize: 0.08, backgroundColor: '#333333', fontColor: '#ffffff' });
+          this.btnC = this.s6InteractRow.addCol({weight: 0.33}).addTextButton({ text: 'CVC', fontSize: 0.08, backgroundColor: '#333333', fontColor: '#ffffff' });
+
+          const handleAnswerA = (ans) => {
+            if (ans === 'AVF') {
+              this.scoreQuiz = 25;
+              this.s6Question.setText('Correct! Proceeding to Angle Test...');
+              this.s6Question.fontColor = '#4CAF50';
+            } else {
+              this.s6Question.setText('Incorrect. The correct answer was AVF.');
+              this.s6Question.fontColor = '#F44336';
+            }
+            setTimeout(() => this.setupQuizPartB(), 2000);
+          };
+
+          this.btnA.onTriggered = () => handleAnswerA('AVF');
+          this.btnB.onTriggered = () => handleAnswerA('AVG');
+          this.btnC.onTriggered = () => handleAnswerA('CVC');
+        }
+
+        setupQuizPartB() {
+          this.quizStep = 'B';
+          this.s6Title.setText('Interactive Quiz - Part B');
+          this.s6Question.setText(`Set optimal angle for ${this.access}. Use +/-`);
+          this.s6Question.fontColor = '#aaaaaa';
+          
+          this.uiPanel.remove(this.s6InteractRow);
+          this.s6InteractRow = this.uiPanel.children[0].addRow({weight: 0.4});
+          
+          this.s6InteractRow.addCol({weight: 0.25}).addTextButton({ text: '-', fontSize: 0.1, backgroundColor: '#E91E63', fontColor: '#ffffff' })
+            .onTriggered = () => { this.quizUserAngle = Math.max(10, this.quizUserAngle - 1); this.angleDisp.setText(`${this.quizUserAngle}°`); };
+          
+          this.angleDisp = this.s6InteractRow.addCol({weight: 0.5}).addText({ text: '45°', fontSize: 0.15, fontColor: '#ffffff' });
+          
+          this.s6InteractRow.addCol({weight: 0.25}).addTextButton({ text: '+', fontSize: 0.1, backgroundColor: '#4CAF50', fontColor: '#ffffff' })
+            .onTriggered = () => { this.quizUserAngle = Math.min(80, this.quizUserAngle + 1); this.angleDisp.setText(`${this.quizUserAngle}°`); };
+
+          this.uiPanel.children[0].addRow({weight: 0.2}).addTextButton({ text: 'Set Angle', fontSize: 0.08, backgroundColor: '#2196F3', fontColor: '#ffffff' })
+            .onTriggered = () => {
+              const diff = Math.abs((this.angleMin + this.angleMax)/2 - this.quizUserAngle);
+              if (this.quizUserAngle >= this.angleMin && this.quizUserAngle <= this.angleMax) {
+                this.scoreAngle = 25;
+                this.s6Question.setText('Perfect Angle!');
+              } else if (diff <= 5) {
+                this.scoreAngle = 15;
+                this.s6Question.setText(`Close. Optimal is ${this.angleMin}-${this.angleMax}°`);
+              } else {
+                this.scoreAngle = 0;
+                this.s6Question.setText(`Incorrect. Optimal is ${this.angleMin}-${this.angleMax}°`);
+              }
+              setTimeout(() => this.transitionTo(SCENES.FINAL_SIM), 3000);
+            };
+        }
+
+        // SCENE 7
+        buildScene7(grid) {
+          this.armGroup.visible = true;
+          this.protractor.visible = true;
+          this.sessionTime = 0; // count up for final sim
+          this.checklist.forEach(item => item.done = false);
+
+          grid.addRow({weight: 0.15}).addText({ text: 'FINAL SIMULATION', fontSize: 0.1, fontColor: '#FFC107' });
+          this.s7TimerText = grid.addRow({weight: 0.1}).addText({ text: 'Time: 00:00', fontSize: 0.08, fontColor: '#ffffff' });
+
+          const listGrid = grid.addRow({weight: 0.5}).addGrid();
+          this.checklistUI = [];
+          this.checklist.forEach((item, idx) => {
+            const row = listGrid.addRow({weight: 1/6});
+            const btn = row.addTextButton({ text: `[ ] ${item.text}`, fontSize: 0.06, backgroundColor: '#333333', fontColor: '#ffffff', textAlign: 'left' });
+            btn.onTriggered = () => {
+              item.done = true;
+              btn.setText(`[✓] ${item.text}`);
+              btn.backgroundColor = '#4CAF50';
+              this.checkAllDone(SCENES.FEEDBACK);
+            };
+            this.checklistUI.push(btn);
+          });
+
+          this.s7SubmitBtn = grid.addRow({weight: 0.2}).addTextButton({ text: 'Finish (Incomplete)', fontSize: 0.08, backgroundColor: '#9E9E9E', fontColor: '#ffffff' });
+          this.s7SubmitBtn.onTriggered = () => {
+            if(this.sessionTime < 120) this.scoreTime = 25;
+            else if (this.sessionTime < 240) this.scoreTime = 15;
+            else this.scoreTime = 5;
+            this.transitionTo(SCENES.FEEDBACK);
+          };
+        }
+
+        // SCENE 8
+        buildScene8(grid) {
+          this.armGroup.visible = false;
+          this.protractor.visible = false;
+          
+          // Calculate Total Score
+          const totalScore = this.scoreQuiz + this.scoreAngle + this.scoreSequence + this.scoreTime;
+
+          grid.addRow({weight: 0.15}).addText({ text: 'Final Evaluation', fontSize: 0.1, fontColor: '#ffffff' });
+          
+          let scoreColor = '#F44336';
+          if (totalScore >= 80) scoreColor = '#4CAF50';
+          else if (totalScore >= 60) scoreColor = '#FFC107';
+
+          grid.addRow({weight: 0.25}).addText({ text: `${totalScore}/100`, fontSize: 0.22, fontColor: scoreColor });
+
+          // Breakdown
+          grid.addRow({weight: 0.1}).addText({ text: `Identification: ${this.scoreQuiz}/25 | Angle: ${this.scoreAngle}/25`, fontSize: 0.06, fontColor: '#aaaaaa' });
+          grid.addRow({weight: 0.1}).addText({ text: `Sequence: ${this.scoreSequence}/25 | Time: ${this.scoreTime}/25`, fontSize: 0.06, fontColor: '#aaaaaa' });
+
+          // AI Rec
+          let rec = "Great job! Ready for clinical practice.";
+          if (totalScore < 60) rec = "Review the procedural checklist and practice angle control.";
+          else if (this.scoreAngle < 15) rec = "Practice wrist stabilization and angle control.";
+          else if (this.scoreSequence < 25) rec = "Review the procedural checklist before next session.";
+
+          grid.addRow({weight: 0.15}).addText({ text: rec, fontSize: 0.06, fontColor: '#FFEB3B' });
+
+          const btnRow = grid.addRow({weight: 0.2});
+          btnRow.addCol({weight: 0.5}).addTextButton({ text: 'Repeat Session', fontSize: 0.08, backgroundColor: '#333333', fontColor: '#ffffff' })
+            .onTriggered = () => this.transitionTo(SCENES.ONBOARDING);
+          btnRow.addCol({weight: 0.5}).addTextButton({ text: 'Next Case', fontSize: 0.08, backgroundColor: '#2196F3', fontColor: '#ffffff' })
+            .onTriggered = () => window.location.reload();
+        }
+
+        // ==========================================
+        // INTERACTIONS & UPDATE LOOP
+        // ==========================================
+
+        onSelectStart(event) {
+          const controller = event.target;
+          if (this.sceneState === SCENES.VISUALIZATION) {
+            this.vessels.forEach(v => {
+              const intersection = xb.user.select(v, controller);
+              if (intersection) {
+                this.s2InfoText.setText(`${v.userData.name}: ${v.userData.desc}`);
+                v.material.emissiveIntensity = 0.5;
+                setTimeout(() => v.material.emissiveIntensity = 0, 1000);
+              }
+            });
+          }
+        }
+
+        formatTime(seconds) {
+          const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+          const s = (seconds % 60).toString().padStart(2, '0');
+          return `${m}:${s}`;
+        }
+
+        update() {
+          const now = performance.now();
+          const dt = (now - this.lastTime) / 1000;
+          this.lastTime = now;
+
+          // Animate blood flow
+          if (this.bloodTexture) {
+            this.bloodTexture.offset.y -= dt * 0.5;
+          }
+
+          // Needle tracking (Scene 4 & 7)
+          if ((this.sceneState === SCENES.GUIDANCE || this.sceneState === SCENES.FINAL_SIM) && this.protractor.visible) {
+            const controller = xb.user.controllers[0];
+            if (controller) {
+              const euler = new THREE.Euler().setFromQuaternion(controller.quaternion);
+              const currentAngle = Math.abs(Math.round(euler.x * (180 / Math.PI)));
+              this.needleVisual.rotation.z = -euler.x;
+
+              const inRange = currentAngle >= this.angleMin && currentAngle <= this.angleMax;
+              const diff = Math.min(Math.abs(currentAngle - this.angleMin), Math.abs(currentAngle - this.angleMax));
+
+              if (inRange) {
+                this.needleVisual.material.color.set(0x4CAF50); // Green
+                this.needleVisual.position.x = 0;
+              } else if (diff <= 5) {
+                this.needleVisual.material.color.set(0xFFC107); // Yellow
+                this.needleVisual.position.x = 0;
+              } else {
+                this.needleVisual.material.color.set(0xF44336); // Red
+                this.shakeTimer += dt;
+                this.needleVisual.position.x = Math.sin(this.shakeTimer * 30) * 0.005;
+              }
+
+              if (this.sceneState === SCENES.GUIDANCE && this.s4AngleText) {
+                this.s4AngleText.setText(`Current: ${currentAngle}° | Target: ${this.angleMin}-${this.angleMax}°`);
+              }
+            }
+          }
+
+          // Timers
+          if (this.sceneState === SCENES.HANDS_FREE) {
+            this.sessionTime = Math.max(0, this.sessionTime - dt);
+            this.s5TimerText.setText(`Time: ${this.formatTime(Math.floor(this.sessionTime))}`);
+            if(this.sessionTime < 60) this.s5TimerText.fontColor = '#F44336';
+            if(this.sessionTime <= 0) this.transitionTo(SCENES.QUIZ);
+          } else if (this.sceneState === SCENES.FINAL_SIM) {
+            this.sessionTime += dt;
+            this.s7TimerText.setText(`Time: ${this.formatTime(Math.floor(this.sessionTime))}`);
+          }
+        }
+      }
+
+      document.addEventListener('DOMContentLoaded', () => {
+        const options = new xb.Options();
+        options.enableUI();
+        options.setAppTitle('Hemodialysis VR Trainer');
+        xb.add(new HemodialysisTraining());
+        xb.init(options);
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>Simulasi Hemodialisis VR — Ruang HD</title>
+
+  <!--
+    A-Frame dari CDN (butuh internet saat dibuka).
+    WebXR (VR + controller + haptic) hanya aktif di secure context:
+      - localhost (Live Server VS Code)  - https:// (hosting)
+    Buka di desktop dulu untuk uji coba. Tidak butuh file aset/gambar apa pun.
+  -->
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+<script src="https://unpkg.com/aframe-curve-component/dist/aframe-curve-component.min.js"></script>
+
+  <style>
+    #panduan {
+      position: fixed; left: 12px; top: 12px; z-index: 9999;
+      max-width: 330px; padding: 14px 16px; border-radius: 12px;
+      background: rgba(40, 26, 12, 0.82); color: #f6ecdd;
+      font-family: "Segoe UI", system-ui, sans-serif; font-size: 13px; line-height: 1.5;
+      border: 1px solid rgba(255, 199, 120, 0.4);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.45); backdrop-filter: blur(6px);
+    }
+    #panduan b { color: #ffc066; }
+    #panduan .hijau { color: #7fe0a0; }
+    #panduan .merah { color: #ff9a8a; }
+    #mode-toggle {
+      position: fixed; left: 12px; bottom: 12px; z-index: 10000;
+      padding: 12px 18px; border-radius: 999px;
+      border: 1px solid rgba(255, 199, 120, 0.55);
+      background: #2a1d0f; color: #f6ecdd; font-weight: 600;
+      font-family: "Segoe UI", system-ui, sans-serif; font-size: 14px;
+      cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+      -webkit-tap-highlight-color: transparent;
+    }
+    #mode-toggle.aktif { background: #4a3414; border-color: #ffc066; color: #ffe2a8; }
+    #mode-toggle:hover { filter: brightness(1.15); }
+    .a-enter-vr-button { background-color: #0d7a8a !important; }
+  </style>
+</head>
+
+<body>
+  <div id="panduan">
+    <b>SIMULASI HEMODIALISIS</b><br />
+    <b>Headset/VR:</b> arahkan laser ke tombol panel + Trigger = pilih/lanjut ·
+    Grip/A = aksi (desinfeksi) · <span class="hijau">B/Y = musik on/off</span> · Joystick = putar.<br />
+    <b>Desktop:</b> drag mouse = menoleh · klik tombol panel · <span class="hijau">SPASI/Enter</span> = lanjut ·
+    <span class="hijau">E</span> = aksi · <span class="hijau">1-4</span> = jawab quiz · <span class="hijau">M</span> = musik · <span class="hijau">Q/X</span> = putar.<br />
+    Ikuti 5 langkah kanulasi → kerjakan <b>quiz</b>. Lengan pasien bisa ditusuk pada titik <span class="hijau">hijau</span>.
+  </div>
+
+  <button id="mode-toggle" type="button">Mode 2D — ketuk untuk 360°</button>
+
+  <a-scene
+    background="color: #15110c"
+    hd-sim
+    view-mode-toggle
+    renderer="colorManagement: true; antialias: true"
+    vr-mode-ui="enabled: true">
+    <a-assets>
+      <a-asset-item id="patient-glb" src="./patient.glb"></a-asset-item>
+      <a-asset-item id="machine-glb" src="./medical_hemodialysis_machine_3d_model.glb"></a-asset-item>
+      <a-asset-item id="catheter-glb" src="./peripheral_venous_catheter.glb"></a-asset-item>
+      <a-asset-item id="canulla-glb" src="./canulla.glb"></a-asset-item>
+    </a-assets>
+
+    <!-- ============ PENCAHAYAAN HANGAT ============ -->
+    <a-entity light="type: ambient; color: #FFF1DD; intensity: 0.8"></a-entity>
+    <a-entity light="type: hemisphere; color: #FFF6EA; groundColor: #6B5A45; intensity: 0.5"></a-entity>
+    <a-entity light="type: directional; color: #FFF4E6; intensity: 0.5" position="-2 4 2"></a-entity>
+    <a-entity light="type: point; color: #FFE3B8; intensity: 0.55; distance: 9" position="0 3 -1.2"></a-entity>
+
+    <!-- mouse cursor (desktop) -->
+    <a-entity id="mouse-cursor" cursor="rayOrigin: mouse" raycaster="objects: .clickable; far: 30"></a-entity>
+
+    <!-- ============ RUANG HD ============ -->
+    <!-- Lantai kayu (tekstur via JS) -->
+    <a-plane id="floor" rotation="-90 0 0" width="9" height="9" color="#C9A877" material="roughness: 0.9"></a-plane>
+    <!-- Plafon -->
+    <a-plane rotation="90 0 0" position="0 3.2 0" width="9" height="9" color="#F1ECE3"></a-plane>
+    <!-- Panel lampu plafon (emissive) -->
+    <a-plane rotation="90 0 0" position="-1.2 3.18 -0.6" width="1.4" height="0.6" color="#FFFDF6" material="shader: flat; emissive: #FFF4DC; emissiveIntensity: 0.8"></a-plane>
+    <a-plane rotation="90 0 0" position="1.2 3.18 -0.6" width="1.4" height="0.6" color="#FFFDF6" material="shader: flat; emissive: #FFF4DC; emissiveIntensity: 0.8"></a-plane>
+    <a-plane rotation="90 0 0" position="0 3.18 -2.8" width="1.4" height="0.6" color="#FFFDF6" material="shader: flat; emissive: #FFF4DC; emissiveIntensity: 0.8"></a-plane>
+
+    <!-- Dinding belakang (krem) -->
+    <a-box position="0 1.6 -4.4" width="9" height="3.2" depth="0.1" color="#E4DDD0"></a-box>
+    <!-- Dinding KIRI: jendela + hijauan -->
+    <a-box position="-4.4 1.6 0" width="0.1" height="3.2" depth="9" color="#ECE6DC"></a-box>
+    <a-plane position="-4.34 1.7 -1.2" rotation="0 90 0" width="4.2" height="1.7" material="color: #BcdDEB; emissive: #CFE6F2; emissiveIntensity: 0.35; opacity: 0.9; transparent: true; shader: flat"></a-plane>
+    <a-plane position="-4.34 1.7 2.2" rotation="0 90 0" width="3.0" height="1.7" material="color: #BcdDEB; emissive: #CFE6F2; emissiveIntensity: 0.35; opacity: 0.9; transparent: true; shader: flat"></a-plane>
+    <a-box position="-4.39 1.7 0" depth="9" height="0.06" width="0.05" color="#D8D2C8"></a-box>
+    <a-plane position="-4.6 1.5 0" rotation="0 90 0" width="9" height="3.0" material="color: #5C7A4D; roughness: 1; shader: flat"></a-plane>
+    <!-- Dinding KANAN: aksen kayu + headwall stainless + LED cove -->
+    <a-box position="4.4 1.6 0" width="0.1" height="3.2" depth="9" color="#6B4E34"></a-box>
+    <a-box position="4.34 1.5 0" depth="9" height="0.85" width="0.05" material="color: #C2C7CC; metalness: 0.7; roughness: 0.3"></a-box>
+    <a-plane position="4.33 2.15 0" rotation="0 -90 0" width="9" height="0.12" material="color: #FFE6BE; emissive: #FFD9A0; emissiveIntensity: 0.95; shader: flat"></a-plane>
+
+    <!-- Tanda HEMODIALISIS -->
+    <a-box position="0 2.7 -4.34" width="2.8" height="0.45" depth="0.02" color="#0D7A8A"></a-box>
+    <a-text value="HEMODIALISIS" position="0 2.7 -4.32" align="center" width="6" color="#ffffff"></a-text>
+
+    <!-- ====== Brankar / bed ====== -->
+    <a-entity id="bed" position="0 0 -1.2">
+      <a-box position="0 0.40 0" width="1.0" height="0.5" depth="2.0" color="#3a4750" material="metalness: 0.3; roughness: 0.6"></a-box>
+      <a-cylinder position="-0.42 0.10 -0.85" radius="0.07" height="0.06" rotation="0 0 90" color="#1b232a"></a-cylinder>
+      <a-cylinder position="0.42 0.10 -0.85" radius="0.07" height="0.06" rotation="0 0 90" color="#1b232a"></a-cylinder>
+      <a-cylinder position="-0.42 0.10 0.85" radius="0.07" height="0.06" rotation="0 0 90" color="#1b232a"></a-cylinder>
+      <a-cylinder position="0.42 0.10 0.85" radius="0.07" height="0.06" rotation="0 0 90" color="#1b232a"></a-cylinder>
+      <a-box position="0 0.74 0" width="1.02" height="0.12" depth="1.95" color="#eef2f4" material="roughness: 0.85"></a-box>
+      <a-box position="-0.53 0.95 0.1" width="0.03" height="0.22" depth="0.9" color="#9aa6ad" material="metalness:0.5"></a-box>
+      <a-box position="0.53 0.95 0.1" width="0.03" height="0.22" depth="0.9" color="#9aa6ad" material="metalness:0.5"></a-box>
+      <a-box position="0 0.84 -0.66" width="0.5" height="0.09" depth="0.34" color="#f7fafb" material="roughness:0.9"></a-box>
+    </a-entity>
+
+    <!-- OLD PATIENT REMOVED -->
+
+    <!-- ====== Monitor tanda vital (KIRI) ====== -->
+    <a-entity position="-2.6 1.25 -1.6" rotation="0 55 0">
+      <a-box width="0.95" height="0.62" depth="0.08" color="#1c2733"></a-box>
+      <a-plane position="0 0 0.05" width="0.85" height="0.52" color="#06141f"></a-plane>
+      <a-text id="vitals-text" position="0 0 0.06" align="center" width="1.5" color="#22c55e" value="TD --\nHR --\nSpO2 --"></a-text>
+      <a-cylinder position="0 -0.5 0" radius="0.05" height="0.8" color="#37474f"></a-cylinder>
+    </a-entity>
+
+    <!-- OLD MACHINE REMOVED -->
+    <!-- ====== Tiang infus + kantong dialisat ====== -->
+    <a-entity position="1.5 0 -2.9">
+      <a-cylinder position="0 1.0 0" radius="0.02" height="2.0" color="#9ca3af"></a-cylinder>
+      <a-box position="0.13 1.7 0" width="0.18" height="0.28" depth="0.05" color="#FFF9C4" material="opacity: 0.85; transparent: true"></a-box>
+      <a-text value="Dialisat" position="0.13 1.5 0.04" align="center" width="0.6" color="#827717"></a-text>
+    </a-entity>
+
+    <!-- ====== RADIO HD (musik ambient, opsional) ====== -->
+    <a-entity id="radio" position="1.35 0 -0.25" rotation="0 -40 0">
+      <a-box position="0 0.50 0" width="0.46" height="0.04" depth="0.34" color="#6b7280"></a-box>
+      <a-cylinder position="0 0.25 0" radius="0.025" height="0.5" color="#4b5563"></a-cylinder>
+      <a-box position="0 0.625 0" width="0.40" height="0.20" depth="0.15" color="#1f2937" material="metalness: 0.2; roughness: 0.7"></a-box>
+      <a-circle position="-0.10 0.625 0.076" radius="0.058" color="#0b0f14"></a-circle>
+      <a-sphere id="radio-led" position="0.155 0.585 0.076" radius="0.011" color="#374151" material="emissive: #374151; emissiveIntensity: 0.5"></a-sphere>
+      <a-box id="eq1" position="0.055 0.66 0.078" width="0.016" height="0.05" depth="0.004" color="#22c55e" material="emissive: #22c55e; emissiveIntensity: 0.5"></a-box>
+      <a-box id="eq2" position="0.085 0.66 0.078" width="0.016" height="0.05" depth="0.004" color="#38bdf8" material="emissive: #38bdf8; emissiveIntensity: 0.5"></a-box>
+      <a-box id="eq3" position="0.115 0.66 0.078" width="0.016" height="0.05" depth="0.004" color="#f59e0b" material="emissive: #f59e0b; emissiveIntensity: 0.5"></a-box>
+      <a-text value="RADIO HD" position="0 0.55 0.078" align="center" width="0.7" color="#9ca3af"></a-text>
+    </a-entity>
+
+    <!-- ====== Dekor tambahan ====== -->
+    <!-- lampu operasi atas bed -->
+    <a-cylinder position="0 2.95 -1.2" radius="0.03" height="0.55" color="#9aa6ad"></a-cylinder>
+    <a-cylinder position="0 2.62 -1.2" radius="0.4" height="0.08" color="#cfd8dc" material="metalness:0.4"></a-cylinder>
+    <a-circle rotation="-90 0 0" position="0 2.575 -1.2" radius="0.34" color="#fffbe6" material="shader: flat"></a-circle>
+    <a-entity light="type: point; color:#fff4d6; intensity:0.6; distance:5" position="0 2.5 -1.2"></a-entity>
+    <!-- tirai privasi -->
+    <a-box position="2.0 2.95 -1.2" width="0.05" height="0.05" depth="2.2" color="#94a3b8"></a-box>
+    <a-box position="2.0 1.55 -2.0" width="0.04" height="2.7" depth="1.0" color="#2f9e8f" material="opacity:0.9; transparent:true; side:double"></a-box>
+    <!-- lemari suplai -->
+    <a-entity position="-3.0 0 -4.05">
+      <a-box position="0 0.95 0" width="1.5" height="1.85" depth="0.42" color="#cdd7dd" material="roughness:0.8"></a-box>
+      <a-box position="-0.45 1.98 0" width="0.4" height="0.22" depth="0.34" color="#0D7A8A"></a-box>
+      <a-box position="0 1.98 0" width="0.4" height="0.22" depth="0.34" color="#2563eb"></a-box>
+      <a-box position="0.45 1.98 0" width="0.4" height="0.22" depth="0.34" color="#f59e0b"></a-box>
+    </a-entity>
+    <!-- jam dinding -->
+    <a-entity position="3.2 2.45 -4.32">
+      <a-circle radius="0.26" color="#ffffff"></a-circle>
+      <a-ring radius-inner="0.26" radius-outer="0.29" color="#334155"></a-ring>
+      <a-box position="0 0.06 0.005" width="0.018" height="0.14" depth="0.005" color="#111827"></a-box>
+      <a-box position="0.05 0 0.005" width="0.10" height="0.016" depth="0.005" rotation="0 0 -60" color="#111827"></a-box>
+    </a-entity>
+    <!-- poster HD -->
+    <a-plane position="-1.5 1.95 -4.32" width="1.1" height="1.4" color="#ffffff" material="shader: flat"></a-plane>
+    <a-text value="HEMODIALISIS" position="-1.5 2.48 -4.31" align="center" width="2.2" color="#0D7A8A"></a-text>
+    <a-text value="Akses: AVF > AVG\nRule of 6:\nvena >=6mm,\n600 ml/mnt,\nkedalaman <6mm"
+            position="-1.5 1.9 -4.31" align="center" width="1.6" color="#0f2233"></a-text>
+
+    <!-- ============ PANEL STATUS + TOMBOL ============ -->
+    <a-entity id="world-panel" position="0 2.0 -1.85">
+      <a-plane width="2.9" height="1.15" color="#0d2233" material="opacity: 0.93; transparent: true"></a-plane>
+      <a-plane width="2.9" height="0.06" position="0 0.57 0.01" color="#0D7A8A"></a-plane>
+      <a-text id="panel-phase" position="0 0.40 0.02" align="center" width="3.0" color="#67e8f9" value="SIAP"></a-text>
+      <a-text id="panel-info" position="0 0.02 0.02" align="center" width="2.7" wrap-count="44" color="#e6f1f7"
+              value="Klik MULAI (atau tekan SPASI) untuk memulai simulasi hemodialisis."></a-text>
+      <a-text id="panel-stats" position="0 -0.46 0.02" align="center" width="2.8" wrap-count="50" color="#cbd5e1" value=""></a-text>
+    </a-entity>
+    <!-- tombol bawah panel -->
+    <a-entity id="btn-back" position="-0.85 1.28 -1.85" visible="false">
+      <a-plane class="clickable" hd-btn="action: back" width="0.95" height="0.34" color="#546E7A" material="shader: flat"></a-plane>
+      <a-text value="< KEMBALI" position="0 0 0.02" width="1.5" color="#fff" align="center"></a-text>
+    </a-entity>
+    <a-entity id="btn-primary" position="0.55 1.28 -1.85">
+      <a-plane class="clickable" hd-btn="action: primary" width="1.5" height="0.34" color="#1976D2" material="shader: flat"></a-plane>
+      <a-text id="btn-primary-text" value="MULAI" position="0 0 0.02" width="1.6" color="#fff" align="center"></a-text>
+    </a-entity>
+
+    <!-- PANEL SUDUT JARUM (hanya muncul di langkah 4) -->
+    <a-entity id="angle-panel" position="0 1.18 -1.86" visible="false">
+      <a-plane width="3.0" height="0.98" color="#0d2233" material="opacity:0.94; transparent:true"></a-plane>
+      <a-text id="angle-hint" value="Pilih sudut kemiringan jarum (AVF), lalu SUNTIK" position="0 0.36 0.02" align="center" width="2.9" wrap-count="46" color="#67e8f9"></a-text>
+      <a-entity id="ang-0" position="-1.0 0.04 0.02"><a-plane class="clickable" hd-btn="action: angle; arg: 0" width="0.5" height="0.26" color="#37474F" material="shader:flat"></a-plane><a-text value="15°" position="0 0 0.02" width="1.2" color="#fff" align="center"></a-text></a-entity>
+      <a-entity id="ang-1" position="-0.5 0.04 0.02"><a-plane class="clickable" hd-btn="action: angle; arg: 1" width="0.5" height="0.26" color="#37474F" material="shader:flat"></a-plane><a-text value="25°" position="0 0 0.02" width="1.2" color="#fff" align="center"></a-text></a-entity>
+      <a-entity id="ang-2" position="0 0.04 0.02"><a-plane class="clickable" hd-btn="action: angle; arg: 2" width="0.5" height="0.26" color="#37474F" material="shader:flat"></a-plane><a-text value="35°" position="0 0 0.02" width="1.2" color="#fff" align="center"></a-text></a-entity>
+      <a-entity id="ang-3" position="0.5 0.04 0.02"><a-plane class="clickable" hd-btn="action: angle; arg: 3" width="0.5" height="0.26" color="#37474F" material="shader:flat"></a-plane><a-text value="45°" position="0 0 0.02" width="1.2" color="#fff" align="center"></a-text></a-entity>
+      <a-entity id="ang-4" position="1.0 0.04 0.02"><a-plane class="clickable" hd-btn="action: angle; arg: 4" width="0.5" height="0.26" color="#37474F" material="shader:flat"></a-plane><a-text value="60°" position="0 0 0.02" width="1.2" color="#fff" align="center"></a-text></a-entity>
+      <a-entity position="-0.65 -0.34 0.02"><a-plane class="clickable" hd-btn="action: back" width="0.9" height="0.28" color="#546E7A" material="shader:flat"></a-plane><a-text value="< KEMBALI" position="0 0 0.02" width="1.4" color="#fff" align="center"></a-text></a-entity>
+      <a-entity position="0.65 -0.34 0.02"><a-plane class="clickable" hd-btn="action: inject" width="0.9" height="0.28" color="#0D7A8A" material="shader:flat"></a-plane><a-text value="SUNTIK" position="0 0 0.02" width="1.4" color="#fff" align="center"></a-text></a-entity>
+    </a-entity>
+
+    <!-- ============ PANEL QUIZ (tersembunyi) ============ -->
+    <a-entity id="quiz-panel" position="0 1.85 -1.85" visible="false">
+      <a-plane width="3.0" height="1.9" color="#1A0D3A" material="opacity: 0.95; transparent: true"></a-plane>
+      <a-plane width="3.0" height="0.06" position="0 0.86 0.01" color="#5E35B1"></a-plane>
+      <a-text id="quiz-head" value="QUIZ" position="0 0.74 0.02" align="center" width="3.0" color="#fff"></a-text>
+      <a-text id="quiz-q" value="" position="0 0.45 0.02" align="center" width="2.85" wrap-count="46" color="#fff"></a-text>
+      <a-entity id="qopt-0" position="0 0.12 0.02">
+        <a-plane class="clickable" hd-btn="action: answer; arg: 0" width="2.8" height="0.24" color="#37474F" material="shader: flat"></a-plane>
+        <a-text id="qopt-0-text" value="" position="0 0 0.02" width="2.7" color="#fff" align="center"></a-text>
+      </a-entity>
+      <a-entity id="qopt-1" position="0 -0.17 0.02">
+        <a-plane class="clickable" hd-btn="action: answer; arg: 1" width="2.8" height="0.24" color="#37474F" material="shader: flat"></a-plane>
+        <a-text id="qopt-1-text" value="" position="0 0 0.02" width="2.7" color="#fff" align="center"></a-text>
+      </a-entity>
+      <a-entity id="qopt-2" position="0 -0.46 0.02">
+        <a-plane class="clickable" hd-btn="action: answer; arg: 2" width="2.8" height="0.24" color="#37474F" material="shader: flat"></a-plane>
+        <a-text id="qopt-2-text" value="" position="0 0 0.02" width="2.7" color="#fff" align="center"></a-text>
+      </a-entity>
+      <a-entity id="qopt-3" position="0 -0.75 0.02">
+        <a-plane class="clickable" hd-btn="action: answer; arg: 3" width="2.8" height="0.24" color="#37474F" material="shader: flat"></a-plane>
+        <a-text id="qopt-3-text" value="" position="0 0 0.02" width="2.7" color="#fff" align="center"></a-text>
+      </a-entity>
+      <a-text id="quiz-result" value="" position="0 -0.2 0.05" align="center" width="2.9" wrap-count="44" color="#FFE082" visible="false"></a-text>
+      <a-entity id="q-restart" position="0 -0.78 0.05" visible="false">
+        <a-plane class="clickable" hd-btn="action: restart" width="1.5" height="0.28" color="#5E35B1" material="shader: flat"></a-plane>
+        <a-text value="ULANGI SIMULASI" position="0 0 0.02" width="1.7" color="#fff" align="center"></a-text>
+      </a-entity>
+    </a-entity>
+
+    <!-- feedback cepat dekat pasien -->
+    <a-text id="feedback" position="0 1.32 -1.2" align="center" width="3.0" color="#e6f1f7" value=""></a-text>
+
+    <!-- ============ RIG PEMAIN ============ -->
+    <a-entity id="rig" position="0 0 0.7">
+      <a-camera id="camera" look-controls="pointerLockEnabled: false" wasd-controls="acceleration: 18">
+        <a-ring position="0 0 -1" radius-inner="0.006" radius-outer="0.011" color="#ffc066" material="opacity: 0.8; transparent: true"></a-ring>
+      </a-camera>
+      <a-entity id="left-hand" laser-controls="hand: left" thumbstick-turn="rig: #rig; angle: 30"
+                raycaster="objects: .clickable" line="color: #38bdf8; opacity: 0.5"></a-entity>
+      <a-entity id="right-hand" laser-controls="hand: right" thumbstick-turn="rig: #rig; angle: 30"
+                raycaster="objects: .clickable" line="color: #f59e0b; opacity: 0.5"></a-entity>
+    </a-entity>
+
+  
+<a-entity id="patient-model" gltf-model="#patient-glb" position="0 0.92 -1.15" rotation="0 0 0" scale="0.010 0.010 0.010"></a-entity>
+<a-entity id="hd-machine" gltf-model="#machine-glb" position="2.1 0 -1.2" rotation="0 -90 0" scale="0.7 0.7 0.7"></a-entity>
+
+
+
+
+
+
+<!-- Bloodline Arterial (Merah) -->
+<a-curve id="arterial-line">
+  <a-curve-point position="0.45 1.00 -0.95"></a-curve-point>
+  <a-curve-point position="0.80 1.25 -1.00"></a-curve-point>
+  <a-curve-point position="1.20 1.15 -1.05"></a-curve-point>
+  <a-curve-point position="1.75 1.00 -1.15"></a-curve-point>
+</a-curve>
+<a-draw-curve curve="#arterial-line" material="color:#d32f2f"></a-draw-curve>
+
+<!-- Bloodline Venous (Biru) -->
+<a-curve id="venous-line">
+  <a-curve-point position="1.75 0.82 -1.15"></a-curve-point>
+  <a-curve-point position="1.20 0.65 -1.05"></a-curve-point>
+  <a-curve-point position="0.80 0.75 -0.95"></a-curve-point>
+  <a-curve-point position="0.45 0.90 -0.90"></a-curve-point>
+</a-curve>
+<a-draw-curve curve="#venous-line" material="color:#1565c0"></a-draw-curve>
+
+
+    <!-- KANULASI AVF (dikembalikan) -->
+    <a-entity id="cannula-rig" position="0.23 0.99 -1.30">
+      <a-sphere id="cannula-point"
+                radius="0.022"
+                color="#4CAF50"
+                material="emissive:#2E7D32; emissiveIntensity:0.4"
+                position="0 0 0"></a-sphere>
+
+      <a-entity id="needle"
+                gltf-model="#canulla-glb"
+                position="0 0.30 0.16"
+                rotation="90 0 0"
+                scale="0.15 0.15 0.15">
+      </a-entity>
+    </a-entity>
+    
+</a-scene>
+
+  <script>
+  /* ===== HAPTIC ===== */
+  function hapticPulse(handEl, intensity, durationMs) {
+    if (!handEl) return;
+    var tc = handEl.components['tracked-controls'];
+    if (!tc || !tc.controller) return;
+    var gp = tc.controller.gamepad; if (!gp) return;
+    if (gp.hapticActuators && gp.hapticActuators.length > 0) {
+      var act = gp.hapticActuators[0];
+      if (act && typeof act.pulse === 'function') { try { act.pulse(intensity, durationMs); return; } catch (e) {} }
+    }
+    if (gp.vibrationActuator && typeof gp.vibrationActuator.playEffect === 'function') {
+      try { gp.vibrationActuator.playEffect('dual-rumble', { duration: durationMs, strongMagnitude: intensity, weakMagnitude: intensity }); } catch (e) {}
+    }
+  }
+
+  /* ===== SNAP-TURN joystick ===== */
+  AFRAME.registerComponent('thumbstick-turn', {
+    schema: { angle: { default: 30 }, rig: { type: 'selector' } },
+    init: function () { this.ready = true; this.onThumb = this.onThumb.bind(this); this.el.addEventListener('thumbstickmoved', this.onThumb); },
+    onThumb: function (evt) {
+      var x = evt.detail.x;
+      if (Math.abs(x) < 0.6) { this.ready = true; return; }
+      if (!this.ready) return; this.ready = false;
+      var rig = this.data.rig || document.querySelector('#rig'); if (!rig) return;
+      var rot = rig.getAttribute('rotation'); var dir = x > 0 ? -1 : 1;
+      rig.setAttribute('rotation', { x: rot.x, y: rot.y + dir * this.data.angle, z: rot.z });
+    }
+  });
+
+  /* ===== TOGGLE 2D / 360 ===== */
+  AFRAME.registerComponent('view-mode-toggle', {
+    init: function () {
+      var self = this; this.is360 = false;
+      this.btn = document.querySelector('#mode-toggle'); this.camera = document.querySelector('#camera');
+      this.mouse = document.querySelector('#mouse-cursor');
+      if (!this.btn || !this.camera) return;
+      this.btn.addEventListener('click', function () { self.reqPerm(); self.setMode(!self.is360); });
+      this.el.addEventListener('enter-vr', function () {
+        self.camera.setAttribute('look-controls', 'enabled', true);
+        if (self.mouse) { self.mouse.removeAttribute('cursor'); self.mouse.removeAttribute('raycaster'); }
+      });
+      this.el.addEventListener('exit-vr', function () {
+        self.applyMode();
+        if (self.mouse) { self.mouse.setAttribute('cursor', 'rayOrigin: mouse'); self.mouse.setAttribute('raycaster', 'objects: .clickable; far: 30'); }
+      });
+      this.setMode(false);
+    },
+    reqPerm: function () {
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try { DeviceOrientationEvent.requestPermission().catch(function () {}); } catch (e) {}
+      }
+    },
+    setMode: function (on) {
+      this.is360 = on; this.applyMode();
+      if (this.btn) { this.btn.textContent = on ? 'Mode 360° — ketuk untuk 2D' : 'Mode 2D — ketuk untuk 360°'; this.btn.classList.toggle('aktif', on); }
+    },
+    applyMode: function () {
+      if (this.is360) this.camera.setAttribute('look-controls', 'enabled: true; pointerLockEnabled: false; magicWindowTrackingEnabled: true');
+      else { this.camera.setAttribute('look-controls', 'enabled: false'); this.camera.setAttribute('rotation', '0 0 0'); }
+    }
+  });
+
+  /* ===== TOMBOL (klik laser/mouse) ===== */
+  AFRAME.registerComponent('hd-btn', {
+    schema: { action: { type: 'string' }, arg: { type: 'string', default: '' } },
+    init: function () {
+      var el = this.el, self = this;
+      var s = el.getAttribute('scale') || { x: 1, y: 1, z: 1 }; this.base = { x: s.x, y: s.y, z: s.z };
+      el.addEventListener('mouseenter', function () { el.setAttribute('scale', (self.base.x * 1.08) + ' ' + (self.base.y * 1.08) + ' ' + (self.base.z * 1.08)); });
+      el.addEventListener('mouseleave', function () { el.setAttribute('scale', self.base.x + ' ' + self.base.y + ' ' + self.base.z); });
+      el.addEventListener('click', function () { if (window.HD) window.HD.dispatch(self.data.action, self.data.arg); });
+    }
+  });
+
+  /* ===== MESIN UTAMA: hd-sim ===== */
+  AFRAME.registerComponent('hd-sim', {
+    init: function () {
+      var self = this;
+
+      this.STEPS = [
+        { t: 'Langkah 1/5 — Identifikasi Akses & Anatomi',
+          b: 'Periksa akses vaskular: AV Fistula (pilihan 1), AV Graft (pilihan 2), Tunneled & Non-tunneled Catheter. Identifikasi vena (biru) & arteri (merah) pada lengan.' },
+        { t: 'Langkah 2/5 — Cek Maturasi (Rule of 6)',
+          b: 'Pastikan fistula matang: diameter vena >=6 mm, aliran 600 ml/menit, kedalaman vena <6 mm. AVF matang ~6 minggu; AV Graft ~2-4 minggu.' },
+        { t: 'Langkah 3/5 — Persiapan Alat & Aseptis',
+          b: 'Siapkan dialiser (hollow fiber), dialisat, bloodline, mesin. Cuci tangan & desinfeksi area (tekan AKSI / Grip / E), jarum bevel ke ATAS.' },
+        { t: 'Langkah 4/5 — Teknik Tusukan (Kanulasi)',
+          b: 'Pilih sudut kemiringan jarum yang tepat untuk AVF (jarum mengikuti sudut yang kamu pilih), lalu tekan SUNTIK. Akan dinilai benar/salah.' },
+        { t: 'Langkah 5/5 — Konfirmasi & Koneksi Sirkuit',
+          b: 'Konfirmasi backflow, hubungkan bloodline. Darah melewati dialiser (membran semipermeabel), lalu kembali ke pasien. Sirkuit HD dimulai.' }
+      ];
+      this.QUIZ = [
+        { q: 'Dializer yang paling umum digunakan?', opts: ['A. Flat plate', 'B. Hollow fiber', 'C. Coil dialyzer', 'D. Parallel plate'], correct: 1, exp: 'Benar. Hollow fiber paling umum.' },
+        { q: 'Buffer dialisat yang menggantikan asetat?', opts: ['A. Sitrat', 'B. Laktat', 'C. Bikarbonat', 'D. Fosfat'], correct: 2, exp: 'Benar. Bikarbonat menggantikan asetat.' },
+        { q: 'Rule of 6 untuk maturasi AV fistula?', opts: ['A. vena >=6mm, 600 ml/mnt, kedalaman <6mm', 'B. 60mm, 60 ml/mnt', 'C. 16mm, 1600 ml/mnt', 'D. kedalaman >6cm'], correct: 0, exp: 'Benar. >=6mm, 600 ml/mnt, <6mm.' },
+        { q: 'Urutan pilihan akses vaskular HD?', opts: ['A. AVG lalu AVF', 'B. Tunneled lalu AVF', 'C. AV Fistula lalu AV Graft', 'D. Non-tunneled lalu AVG'], correct: 2, exp: 'Benar. AVF dulu, lalu AVG.' },
+        { q: 'Peritoneal dialysis dibedakan menjadi?', opts: ['A. CAPD dan APD', 'B. AVF dan AVG', 'C. HD dan PD', 'D. Tunneled & non-tunneled'], correct: 0, exp: 'Benar. CAPD (manual) & APD (mesin).' }
+      ];
+
+      this.phase = 'idle'; this.step = 0; this.cannulated = false;
+      this.qi = 0; this.score = 0; this.qlock = false;
+      this.radioPulse = 0; this.feedbackTimer = 0; this.audioCtx = null;
+
+      this.elPhase = q('#panel-phase'); this.elInfo = q('#panel-info'); this.elStats = q('#panel-stats');
+      this.elFeedback = q('#feedback'); this.elVitals = q('#vitals-text');
+      this.elPrimaryTxt = q('#btn-primary-text'); this.btnBack = q('#btn-back');
+      this.worldPanel = q('#world-panel'); this.btnPrimary = q('#btn-primary');
+      this.quizPanel = q('#quiz-panel'); this.quizResult = q('#quiz-result');
+      this.point = q('#cannula-point'); this.needle = q('#needle');
+      this.leftHand = q('#left-hand'); this.rightHand = q('#right-hand');
+      this.anglePanel = q('#angle-panel'); this.angleHint = q('#angle-hint');
+      this.angleBtns = [q('#ang-0'), q('#ang-1'), q('#ang-2'), q('#ang-3'), q('#ang-4')];
+      this.ANGLES = [15, 25, 35, 45, 60]; this.correctAngle = 25; this.selectedAngle = null;
+
+      // radio/music
+      this.radioLed = q('#radio-led');
+      this.eqBars = [q('#eq1'), q('#eq2'), q('#eq3')];
+      this.musicOn = false; this.musicTimer = null; this.noiseBuf = null; this.masterGain = null;
+      this.bassPattern = [110,0,220,0,110,0,220,0,87.31,0,174.6,0,98,0,196,0];
+
+      function q(s){ return document.querySelector(s); }
+
+      // VR buttons: grip/A = aksi, B/Y = musik (trigger dipakai cursor utk klik tombol)
+      [this.leftHand, this.rightHand].forEach(function (h) {
+        if (!h) return;
+        h.addEventListener('gripdown', function () { self.doSecondary(h); });
+        h.addEventListener('abuttondown', function () { self.doSecondary(h); });
+        h.addEventListener('xbuttondown', function () { self.doSecondary(h); });
+        h.addEventListener('bbuttondown', function () { self.toggleRadio(); });
+        h.addEventListener('ybuttondown', function () { self.toggleRadio(); });
+      });
+
+      // keyboard desktop
+      window.addEventListener('keydown', function (e) {
+        if (e.repeat) return; var k = e.key.toLowerCase();
+        if (k === ' ' || k === 'enter') { e.preventDefault(); self.doPrimary(); }
+        else if (k === 'backspace') { e.preventDefault(); self.doBack(); }
+        else if (k === 'e') { self.doSecondary(self.rightHand); }
+        else if (k === 'm') { self.toggleRadio(); }
+        else if (k === 'q') { self.snap(-1); }
+        else if (k === 'x') { self.snap(1); }
+        else if (['1','2','3','4','5'].indexOf(k) >= 0) {
+          if (self.phase === 'step' && self.step === 3) self.selectAngle(parseInt(k,10)-1);
+          else self.answer(parseInt(k,10)-1);
+        }
+      });
+
+      this.el.addEventListener('enter-vr', function () { self.ensureAudio(); });
+
+      // dispatcher utk tombol
+      window.HD = {
+        dispatch: function (a, arg) {
+          if (a === 'primary') self.doPrimary();
+          else if (a === 'back') self.doBack();
+          else if (a === 'answer') self.answer(parseInt(arg, 10));
+          else if (a === 'angle') self.selectAngle(parseInt(arg, 10));
+          else if (a === 'inject') self.confirmInject();
+          else if (a === 'restart') self.restartFromResult();
+        }
+      };
+
+      this.applyWood();
+      this.render();
+    },
+
+    /* ---------- AUDIO ---------- */
+    ensureAudio: function () {
+      if (this.audioCtx) { if (this.audioCtx.state === 'suspended') this.audioCtx.resume(); return; }
+      try { var AC = window.AudioContext || window.webkitAudioContext; this.audioCtx = new AC(); } catch (e) { this.audioCtx = null; }
+    },
+    beep: function (freq, durMs, vol) {
+      if (!this.audioCtx) return;
+      var ctx = this.audioCtx, t = ctx.currentTime, osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol || 0.22, t + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + durMs / 1000);
+      osc.connect(g); g.connect(ctx.destination); osc.start(t); osc.stop(t + durMs / 1000);
+    },
+
+    /* ---------- ALUR ---------- */
+    doPrimary: function () {
+      this.ensureAudio();
+      if (this.phase === 'idle') { this.startSim(); }
+      else if (this.phase === 'step') {
+        if (this.step === 3 && !this.cannulated) { this.confirmInject(); }
+        else { this.advance(); }
+      }
+      else if (this.phase === 'done') { this.startQuiz(); }
+      else if (this.phase === 'done2') { this.restartFromResult(); }
+    },
+    doSecondary: function (hand) {
+      this.ensureAudio();
+      if (this.phase === 'step' && this.step === 2) {
+        this.beep(660, 120, 0.22); hapticPulse(hand, 0.4, 100);
+        this.setFeedback('Aseptik: cuci tangan & desinfeksi ✓', '#7fe0a0');
+      }
+    },
+    doBack: function () {
+      if (this.phase === 'step' && this.step > 0) {
+        this.step--;
+        if (this.step === 3) this.prepInject(); else this.resetNeedle();
+        this.render();
+      }
+    },
+    startSim: function () {
+      this.phase = 'step'; this.step = 0; this.cannulated = false; this.resetNeedle();
+      this.setVitals('TD 150/95', 'HR 92', 'SpO2 95', '#f59e0b');
+      this.setFeedback('Simulasi dimulai. Ikuti 5 langkah.', '#67e8f9');
+      this.render();
+    },
+    advance: function () {
+      this.step++;
+      if (this.step > 4) { this.finish(); return; }
+      if (this.step === 3) this.prepInject();
+      else if (this.step < 3) this.resetNeedle();
+      // step 4 (index 4): biarkan jarum tetap tertancap
+      this.render();
+    },
+    // Siapkan langkah kanulasi: jarum melayang, sudut belum dipilih
+    prepInject: function () {
+      this.resetNeedle();
+      this.selectedAngle = null;
+      if (this.angleBtns) for (var b = 0; b < this.angleBtns.length; b++) {
+        var pl = this.angleBtns[b] && this.angleBtns[b].querySelector('a-plane');
+        if (pl) pl.setAttribute('color', '#37474F');
+      }
+      if (this.angleHint) this.angleHint.setAttribute('value', 'Pilih sudut kemiringan jarum (AVF), lalu SUNTIK');
+    },
+    // Pilih sudut -> jarum langsung miring sesuai sudut yang dipilih
+    selectAngle: function (i) {
+      if (this.phase !== 'step' || this.step !== 3 || this.cannulated) return;
+      if (i < 0 || i >= this.ANGLES.length) return;
+      this.selectedAngle = this.ANGLES[i];
+      for (var b = 0; b < this.angleBtns.length; b++) {
+        var pl = this.angleBtns[b] && this.angleBtns[b].querySelector('a-plane');
+        if (pl) pl.setAttribute('color', b === i ? '#0D7A8A' : '#37474F');
+      }
+      var n = this.needle;
+      n.removeAttribute('animation__pos'); n.removeAttribute('animation__rot'); n.removeAttribute('animation__miss');
+      n.setAttribute('position', '0.00 0.30 0.16');
+      n.setAttribute('rotation', (90 - this.selectedAngle) + ' 0 0');   // kemiringan = sudut dipilih
+      this.angleHint.setAttribute('value', 'Sudut dipilih: ' + this.selectedAngle + '°  — tekan SUNTIK');
+      this.beep(520, 45, 0.14);
+    },
+    // Konfirmasi tusukan: cek benar/salah
+    confirmInject: function () {
+      if (this.phase !== 'step' || this.step !== 3 || this.cannulated) return;
+      if (this.selectedAngle === null) { this.setFeedback('Pilih sudut jarum dulu.', '#f59e0b'); return; }
+      var n = this.needle;
+      if (this.selectedAngle === this.correctAngle) {
+        this.cannulated = true;
+        n.removeAttribute('animation__pos'); n.removeAttribute('animation__rot'); n.removeAttribute('animation__miss');
+        n.setAttribute('rotation', (90 - this.correctAngle) + ' 0 0');
+        n.setAttribute('animation__pos', 'property: position; to: 0.00 0.02 0.00; dur: 1100; easing: easeInOutQuad');
+        this.point.setAttribute('material', 'emissive: #66FF99; emissiveIntensity: 1.0');
+        this.point.setAttribute('scale', '1.4 1.4 1.4');
+        hapticPulse(this.rightHand, 0.8, 200); this.beep(880, 90, 0.2);
+        this.setVitals('TD 140/90', 'HR 86', 'SpO2 97', '#22c55e');
+        this.setFeedback('BENAR! Sudut 25° tepat untuk AVF — backflow (+).', '#7fe0a0');
+        this.anglePanel.setAttribute('visible', false);
+        this.render();
+      } else {
+        hapticPulse(this.rightHand, 0.95, 180); this.beep(200, 140, 0.26);
+        this.setFeedback('SALAH — sudut ' + this.selectedAngle + '° kurang tepat. Ideal AVF ~25°. Coba lagi.', '#ff9a8a');
+        n.removeAttribute('animation__miss');
+        n.setAttribute('animation__miss', 'property: position; from: 0.00 0.24 0.16; to: 0.012 0.25 0.04; dur: 110; dir: alternate; loop: 2');
+      }
+    },
+    resetNeedle: function () {
+      this.cannulated = false;
+      var n = this.needle; n.removeAttribute('animation__pos'); n.removeAttribute('animation__rot');
+      n.setAttribute('position', '0.00 0.30 0.16'); n.setAttribute('rotation', '90 0 0');
+      this.point.setAttribute('material', 'emissive: #2E7D32; emissiveIntensity: 0.4'); this.point.setAttribute('scale', '1 1 1');
+    },
+    finish: function () {
+      this.phase = 'done'; this.stopMusic();
+      this.setVitals('TD 130/80', 'HR 76', 'SpO2 98', '#22c55e');
+      this.setFeedback('Sirkuit hemodialisis berjalan. Pasien stabil.', '#7fe0a0');
+      this.render();
+    },
+
+    /* ---------- QUIZ ---------- */
+    startQuiz: function () {
+      this.phase = 'quiz'; this.qi = 0; this.score = 0; this.qlock = false;
+      this.worldPanel.setAttribute('visible', false);
+      this.btnPrimary.setAttribute('visible', false);
+      this.btnBack.setAttribute('visible', false);
+      this.anglePanel.setAttribute('visible', false);
+      this.quizPanel.setAttribute('visible', true);
+      this.quizResult.setAttribute('visible', false);
+      document.querySelector('#q-restart').setAttribute('visible', false);
+      for (var k = 0; k < 4; k++) document.querySelector('#qopt-' + k).setAttribute('visible', true);
+      this.renderQuiz();
+    },
+    renderQuiz: function () {
+      this.qlock = false; var it = this.QUIZ[this.qi];
+      document.querySelector('#quiz-head').setAttribute('value', 'QUIZ ' + (this.qi + 1) + '/' + this.QUIZ.length + '   |   Skor: ' + this.score);
+      document.querySelector('#quiz-q').setAttribute('value', it.q);
+      for (var k = 0; k < 4; k++) {
+        document.querySelector('#qopt-' + k + '-text').setAttribute('value', it.opts[k]);
+        document.querySelector('#qopt-' + k).querySelector('a-plane').setAttribute('color', '#37474F');
+      }
+    },
+    answer: function (idx) {
+      if (this.phase !== 'quiz' || this.qlock || idx < 0 || idx > 3) return;
+      this.qlock = true; this.ensureAudio();
+      var it = this.QUIZ[this.qi], sel = document.querySelector('#qopt-' + idx).querySelector('a-plane');
+      if (idx === it.correct) { this.score++; sel.setAttribute('color', '#2E7D32'); this.beep(880,80,0.18); this.setFeedback(it.exp, '#7fe0a0'); }
+      else { sel.setAttribute('color', '#C62828'); document.querySelector('#qopt-' + it.correct).querySelector('a-plane').setAttribute('color', '#2E7D32'); this.beep(200,120,0.22); this.setFeedback('Kurang tepat. Benar: ' + it.opts[it.correct], '#f59e0b'); }
+      var self = this;
+      setTimeout(function () { self.qi++; if (self.qi < self.QUIZ.length) self.renderQuiz(); else self.quizDone(); }, 2200);
+    },
+    quizDone: function () {
+      for (var k = 0; k < 4; k++) document.querySelector('#qopt-' + k).setAttribute('visible', false);
+      document.querySelector('#quiz-q').setAttribute('value', '');
+      var msg = this.score >= 5 ? 'SEMPURNA!' : this.score === 4 ? 'Bagus!' : this.score === 3 ? 'Cukup.' : 'Perlu belajar lagi.';
+      document.querySelector('#quiz-head').setAttribute('value', 'HASIL QUIZ');
+      this.quizResult.setAttribute('value', 'Skor: ' + this.score + '/' + this.QUIZ.length + '\n' + msg);
+      this.quizResult.setAttribute('visible', true);
+      document.querySelector('#q-restart').setAttribute('visible', true);
+      this.phase = 'done2';
+    },
+    restartFromResult: function () {
+      this.quizPanel.setAttribute('visible', false);
+      document.querySelector('#q-restart').setAttribute('visible', false);
+      this.worldPanel.setAttribute('visible', true);
+      this.btnPrimary.setAttribute('visible', true);
+      this.restart();
+    },
+    restart: function () {
+      this.phase = 'idle'; this.step = 0; this.resetNeedle();
+      this.anglePanel.setAttribute('visible', false);
+      this.setVitals('TD --', 'HR --', 'SpO2 --', '#22c55e');
+      this.setFeedback('', '#fff'); this.render();
+    },
+
+    /* ---------- RADIO/MUSIC ---------- */
+    toggleRadio: function () { this.ensureAudio(); if (this.musicOn) this.stopMusic(); else this.startMusic(); },
+    makeNoise: function () { var ctx=this.audioCtx, len=Math.floor(ctx.sampleRate*0.4), buf=ctx.createBuffer(1,len,ctx.sampleRate), d=buf.getChannelData(0); for(var i=0;i<len;i++) d[i]=Math.random()*2-1; return buf; },
+    music: function () { if(!this.masterGain){ this.masterGain=this.audioCtx.createGain(); this.masterGain.gain.value=0.32; this.masterGain.connect(this.audioCtx.destination);} return this.masterGain; },
+    kick: function (t){ var ctx=this.audioCtx,o=ctx.createOscillator(),g=ctx.createGain(); o.frequency.setValueAtTime(150,t); o.frequency.exponentialRampToValueAtTime(48,t+0.12); g.gain.setValueAtTime(0.8,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.22); o.connect(g); g.connect(this.music()); o.start(t); o.stop(t+0.24); },
+    hat: function (t,open){ var ctx=this.audioCtx,n=ctx.createBufferSource(); n.buffer=this.noiseBuf; var f=ctx.createBiquadFilter(); f.type='highpass'; f.frequency.value=7000; var g=ctx.createGain(); var dur=open?0.10:0.03; g.gain.setValueAtTime(0.18,t); g.gain.exponentialRampToValueAtTime(0.001,t+dur); n.connect(f); f.connect(g); g.connect(this.music()); n.start(t); n.stop(t+dur+0.02); },
+    bass: function (t,freq,dur){ var ctx=this.audioCtx,o=ctx.createOscillator(),g=ctx.createGain(),f=ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=700; o.type='sawtooth'; o.frequency.value=freq; g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.26,t+0.02); g.gain.exponentialRampToValueAtTime(0.001,t+dur); o.connect(f); f.connect(g); g.connect(this.music()); o.start(t); o.stop(t+dur+0.02); },
+    scheduleStep: function (step,t){ if(step%4===0){ this.kick(t); this.hat(t,false);} if(step===2||step===6||step===10||step===14) this.hat(t,true); var bf=this.bassPattern[step]; if(bf>0) this.bass(t,bf,step%4===0?0.18:0.12); if(step%4===0){ var self=this; var delay=Math.max(0,(t-this.audioCtx.currentTime)*1000); setTimeout(function(){ self.radioPulse=1; },delay);} },
+    startMusic: function (){ this.ensureAudio(); if(!this.audioCtx||this.musicOn) return; this.musicOn=true; this.noiseBuf=this.makeNoise(); this.mstep=0; this.stepDur=(60/110)/4; this.nextNoteTime=this.audioCtx.currentTime+0.08; if(this.radioLed) this.radioLed.setAttribute('color','#22c55e'); var self=this; this.musicTimer=setInterval(function(){ if(!self.audioCtx) return; while(self.nextNoteTime<self.audioCtx.currentTime+0.15){ self.scheduleStep(self.mstep,self.nextNoteTime); self.nextNoteTime+=self.stepDur; self.mstep=(self.mstep+1)%16; } },25); },
+    stopMusic: function (){ if(this.musicTimer){ clearInterval(this.musicTimer); this.musicTimer=null;} this.musicOn=false; if(this.radioLed) this.radioLed.setAttribute('color','#374151'); },
+
+    snap: function (dir){ var rig=document.querySelector('#rig'); var rot=rig.getAttribute('rotation'); rig.setAttribute('rotation',{x:rot.x,y:rot.y+dir*30,z:rot.z}); },
+
+    /* ---------- UI ---------- */
+    setFeedback: function (text, color){ this.elFeedback.setAttribute('value', text); this.elFeedback.setAttribute('color', color); this.feedbackTimer = text ? 2400 : 0; },
+    setVitals: function (l1,l2,l3,color){ this.elVitals.setAttribute('value', l1+'\n'+l2+'\n'+l3); this.elVitals.setAttribute('color', color); },
+    render: function () {
+      var label, info, primary = 'LANJUT >', showBack = false, showPrimary = true, showAngle = false;
+      if (this.phase === 'idle') { label='SIAP'; info='Klik MULAI (atau SPASI) untuk memulai simulasi hemodialisis.'; primary='MULAI'; }
+      else if (this.phase === 'step') {
+        var s = this.STEPS[this.step]; label = s.t; info = s.b; showBack = this.step > 0;
+        if (this.step === 3 && !this.cannulated) { showAngle = true; showPrimary = false; showBack = false; }
+        else if (this.step === 3 && this.cannulated) { primary = 'LANJUT >'; }
+        else if (this.step === 4) { primary = 'SELESAI >'; }
+        else { primary = 'LANJUT >'; }
+      }
+      else if (this.phase === 'done') { label='SIRKUIT HD BERJALAN'; info='Hemodialisis dimulai, pasien stabil. Klik MULAI QUIZ untuk evaluasi.'; primary='MULAI QUIZ'; }
+      this.elPhase.setAttribute('value', label);
+      this.elInfo.setAttribute('value', info);
+      this.elPrimaryTxt.setAttribute('value', primary);
+      this.btnPrimary.setAttribute('visible', showPrimary);
+      this.btnBack.setAttribute('visible', showBack);
+      this.anglePanel.setAttribute('visible', showAngle);
+      this.elStats.setAttribute('value', this.phase === 'step' ? ('Langkah ' + (this.step + 1) + '/5') : '');
+    },
+
+    /* ---------- LANTAI KAYU ---------- */
+    woodCanvas: function () {
+      var c = document.createElement('canvas'); c.width = 1024; c.height = 1024; var x = c.getContext('2d');
+      var base = ['#C9A877','#CCB082','#C09C6C','#D3B68A','#BD9863','#C7A675','#CBAE80'];
+      var planks = 7, ph = c.height / planks;
+      for (var i = 0; i < planks; i++) {
+        x.fillStyle = base[i % base.length]; x.fillRect(0, i * ph, c.width, ph);
+        for (var g = 0; g < 46; g++) {
+          x.strokeStyle = 'rgba(120,88,52,' + (0.04 + Math.random() * 0.07) + ')'; x.lineWidth = 1 + Math.random() * 1.6;
+          x.beginPath(); var yy = i * ph + Math.random() * ph; x.moveTo(0, yy);
+          for (var sx = 0; sx <= c.width; sx += 64) x.lineTo(sx, yy + (Math.random() - 0.5) * 6); x.stroke();
+        }
+        x.fillStyle = 'rgba(78,52,28,0.55)'; x.fillRect(0, i * ph, c.width, 3);
+      }
+      return c;
+    },
+    applyWood: function () {
+      var self = this; var floor = document.querySelector('#floor'); if (!floor) return;
+      var mesh = floor.getObject3D('mesh'); if (!mesh) { setTimeout(function(){ self.applyWood(); }, 200); return; }
+      var tex = new THREE.CanvasTexture(this.woodCanvas());
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(4, 4);
+      mesh.material.map = tex; mesh.material.color.set('#FFFFFF'); mesh.material.needsUpdate = true;
+    },
+
+    /* ---------- PER FRAME ---------- */
+    tick: function (time, dt) {
+      if (!dt) return; var k = Math.min(dt / 16.67, 3);
+      if (this.radioPulse > 0.001) this.radioPulse *= Math.pow(0.80, k);
+      if (this.eqBars) for (var bi = 0; bi < this.eqBars.length; bi++) { if (!this.eqBars[bi]) continue; var amp = this.musicOn ? (0.4 + this.radioPulse * (1.6 + bi * 0.6)) : 0.25; this.eqBars[bi].object3D.scale.y = amp; }
+      if (this.radioLed) { var ls = 1 + (this.musicOn ? this.radioPulse * 1.6 : 0); this.radioLed.object3D.scale.set(ls, ls, ls); }
+      if (this.feedbackTimer > 0) { this.feedbackTimer -= dt; if (this.feedbackTimer <= 0) this.elFeedback.setAttribute('value', ''); }
+    },
+    remove: function () { this.stopMusic(); }
+  });
+  </script>
+</body>
+</html>
